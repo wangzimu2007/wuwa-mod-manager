@@ -10,6 +10,9 @@ $Switch = $cfg.switchScript
 $Manager = Join-Path $PSScriptRoot 'Mod管理器.ps1'
 $Records = $cfg.recordsDir
 $PS = "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+$TfrIni = if ($cfg.gameBin) { Join-Path $cfg.gameBin 'WuwaTFR.ini' } else { '' }
+$StateFile = Join-Path $script:RootDir '.state\反虚化.json'
+. (Join-Path $PSScriptRoot '反虚化状态.ps1')
 
 [xml]$xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -36,7 +39,7 @@ $PS = "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
 
     <StackPanel Grid.Row="0">
       <TextBlock Text="鸣潮启动器" Foreground="#9fd0ff" FontSize="22" FontWeight="SemiBold"/>
-      <TextBlock Text="选择启动模式（会自动写好对应的画质预设与注入开关）" Foreground="#6f7787" FontSize="12" Margin="0,6,0,0"/>
+      <TextBlock Text="双击卡片启动（会自动写好对应的画质预设与注入开关）" Foreground="#6f7787" FontSize="12" Margin="0,6,0,0"/>
     </StackPanel>
 
     <Grid Grid.Row="1" Margin="0,20,0,0">
@@ -96,16 +99,68 @@ $CardClean = $win.FindName('CardClean')
 $BtnManager = $win.FindName('BtnManager')
 $BtnRecords = $win.FindName('BtnRecords')
 
+function Get-LingeringGame {
+    @(Get-Process -Name 'Client-Win64-Shipping', 'Wuthering Waves', 'launcher' -ErrorAction SilentlyContinue)
+}
+
+function Stop-LingeringGame {
+    $p = Get-LingeringGame
+    if ($p.Count -eq 0) { return $true }
+    # 先自动等它自己退干净（最多 90 秒）：点 X 后进程往往还要几十秒才真正退出
+    $Status.Text = "检测到游戏仍在退出中，等待其完全关闭…"
+    try { $Status.Dispatcher.Invoke([Action] { }, 'Background') } catch { }
+    for ($i = 1; $i -le 45; $i++) {
+        Start-Sleep -Seconds 2
+        if ((Get-LingeringGame).Count -eq 0) {
+            $Status.Text = "游戏已完全退出，继续启动…"
+            try { $Status.Dispatcher.Invoke([Action] { }, 'Background') } catch { }
+            return $true
+        }
+        $Status.Text = ("等待游戏退出… {0} 秒" -f ($i * 2))
+        try { $Status.Dispatcher.Invoke([Action] { }, 'Background') } catch { }
+    }
+    $p = Get-LingeringGame
+    $names = ($p | ForEach-Object { "$($_.ProcessName)($($_.Id))" }) -join '、'
+    $ans = [System.Windows.MessageBox]::Show(
+        "检测到游戏进程仍在后台运行：`n`n$names`n`n是否结束它们后再启动？",
+        "鸣潮启动器", 'YesNo', 'Question')
+    if ($ans -ne 'Yes') { $Status.Text = "已取消。请等待游戏完全退出再试。"; return $false }
+    foreach ($x in $p) { try { Stop-Process -Id $x.Id -Force -ErrorAction Stop } catch { } }
+    Start-Sleep -Seconds 2
+    if ((Get-LingeringGame).Count -gt 0) { $Status.Text = "⚠ 仍有进程未结束，请用任务管理器手动关闭"; return $false }
+    return $true
+}
+
 function Start-Mode([string]$mode, [string]$label) {
     if (-not (Test-Path -LiteralPath $Switch)) { $Status.Text = "❌ 找不到模式切换脚本：$Switch"; return }
+    if (-not (Stop-LingeringGame)) { return }
+    # 启动前把「反虚化」状态同步进 WuwaTFR.ini，保证这次进游戏就是想要的状态
+    if ($TfrIni) {
+        $sync = Sync-TfrIni $StateFile $TfrIni
+        if ($sync.ok) { Write-Host "[启动器] $($sync.msg)" }
+    }
     $Status.Text = "正在启动 [$label] …（会先写画质预设，再启动游戏）"
     Start-Process -FilePath $PS -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$Switch`"", '-Mode', $mode -WorkingDirectory (Split-Path $Switch -Parent)
     $win.Close()
 }
 
-$CardMod.Add_MouseLeftButtonUp({ Start-Mode 'mod' 'Mod 模式' })
-$CardRt.Add_MouseLeftButtonUp({ Start-Mode 'rt' '光追模式' })
-$CardClean.Add_MouseLeftButtonUp({ Start-Mode 'clean' '干净模式' })
+# WPF 的 ClickCount 只在 MouseDown 系列事件里可靠（Up 事件恒为 1）；
+# 事件脚本块要用 GetNewClosure 绑定变量，否则触发时已出作用域。
+function Invoke-OnDoubleClick([object]$card, [scriptblock]$action, [string]$label) {
+    $handler = {
+        param($s, $e)
+        if ($e.ClickCount -ge 2) {
+            $Status.Text = "正在启动 [$label] …"
+            & $action
+        } else {
+            $Status.Text = "已选中 [$label]，再点一次即启动（双击）"
+        }
+    }.GetNewClosure()
+    $card.Add_MouseLeftButtonDown($handler)
+}
+Invoke-OnDoubleClick $CardMod { Start-Mode 'mod' 'Mod 模式' } 'Mod 模式'
+Invoke-OnDoubleClick $CardRt { Start-Mode 'rt' '光追模式' } '光追模式'
+Invoke-OnDoubleClick $CardClean { Start-Mode 'clean' '干净模式' } '干净模式'
 $CardMod.Add_MouseEnter({ $CardMod.BorderBrush = [System.Windows.Media.Brushes]::SeaGreen })
 $CardMod.Add_MouseLeave({ $CardMod.BorderBrush = (New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString('#242936'))) })
 $CardRt.Add_MouseEnter({ $CardRt.BorderBrush = [System.Windows.Media.Brushes]::Goldenrod })
@@ -121,5 +176,5 @@ $BtnManager.Add_Click({
 })
 $BtnRecords.Add_Click({ if (Test-Path -LiteralPath $Records) { Start-Process explorer.exe $Records } })
 
-$Status.Text = "点上面任意一张卡片即可启动游戏"
+$Status.Text = "双击上面任意一张卡片即可启动（单击不会触发）"
 [void]$win.ShowDialog()

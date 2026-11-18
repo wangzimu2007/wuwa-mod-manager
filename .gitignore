@@ -9,3 +9,5 @@ skin-lists/
 # 皮肤库/Mod 本体（绝不入库）
 Skins/
 Mods/
+# 运行状态（反虚化开关等）
+.state/
