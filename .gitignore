@@ -1,0 +1,11 @@
+# 个人配置
+config.json
+# 运行产物
+preview-output/
+skin-lists/
+*.log
+*.bak
+*.bak-*
+# 皮肤库/Mod 本体（绝不入库）
+Skins/
+Mods/
