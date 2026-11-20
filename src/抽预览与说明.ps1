@@ -1,13 +1,9 @@
 ﻿param(
     [string]$Char = "卡提希娅",
-    [string]$Root = "",
-    [string]$OutDir = ""
+    [string]$Root = "F:\QuarkDownload\鸣潮美化包\d3dx版\【可选增量】\【往期】v1.0~3.6增量合集\【往期】v1.0~3.6增量合集",
+    [string]$OutDir = "E:\GameMods\WWMI-Mods\使用记录\鸣潮\整合包预览\卡提希娅"
 )
 $ErrorActionPreference = 'SilentlyContinue'
-. (Join-Path $PSScriptRoot '_config.ps1')
-$cfg = Get-Cfg
-if (-not $Root) { $Root = $cfg.packDir }
-if (-not $OutDir) { $OutDir = Join-Path (Split-Path $PSScriptRoot -Parent) 'preview-output' }
 Add-Type -TypeDefinition @"
 using System; using System.Collections.Generic; using System.IO;
 public class Scan7zB {

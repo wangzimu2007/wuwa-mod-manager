@@ -3,16 +3,11 @@
     [string]$Name,
     [switch]$List,
     [switch]$Restore,
-    [string]$SkinsRoot = "",
-    [string]$Mods = ""
+    [string]$SkinsRoot = "E:\GameMods\WWMI-Mods\Skins",
+    [string]$Mods = "$env:APPDATA\XXMI Launcher\WWMI\Mods"
 )
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
-
-. (Join-Path $PSScriptRoot '_config.ps1')
-$cfg = Get-Cfg
-if (-not $SkinsRoot) { $SkinsRoot = $cfg.skinsDir }
-if (-not $Mods) { $Mods = $cfg.modsDir }
 
 $targetDir = Join-Path $SkinsRoot $Char
 $backupRoot = Join-Path $SkinsRoot "_原版备份"

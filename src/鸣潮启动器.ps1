@@ -4,15 +4,10 @@ Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName PresentationCore
 Add-Type -AssemblyName WindowsBase
 
-. (Join-Path $PSScriptRoot '_config.ps1')
-$cfg = Get-Cfg
-$Switch = $cfg.switchScript
-$Manager = Join-Path $PSScriptRoot 'Mod管理器.ps1'
-$Records = $cfg.recordsDir
+$Switch = "C:\Users\wangzimu\Desktop\mod预设管理\鸣潮\鸣潮模式切换.ps1"
+$Manager = "E:\GameMods\WWMI-Mods\工具\Mod管理器.ps1"
+$Records = "E:\GameMods\WWMI-Mods\使用记录\鸣潮"
 $PS = "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
-$TfrIni = if ($cfg.gameBin) { Join-Path $cfg.gameBin 'WuwaTFR.ini' } else { '' }
-$StateFile = Join-Path $script:RootDir '.state\反虚化.json'
-. (Join-Path $PSScriptRoot '反虚化状态.ps1')
 
 [xml]$xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -62,7 +57,7 @@ $StateFile = Join-Path $script:RootDir '.state\反虚化.json'
         <StackPanel Margin="18">
           <TextBlock Text="RT" Foreground="#ffc078" FontFamily="Consolas" FontSize="13" FontWeight="Bold"/>
           <TextBlock Text="光追模式" Foreground="#e3e7ef" FontSize="18" FontWeight="SemiBold" Margin="0,8,0,0"/>
-          <TextBlock Text="DLSS5 + 光线追踪（官方启动器）" Foreground="#8b93a3" FontSize="12" Margin="0,10,0,0" TextWrapping="Wrap"/>
+          <TextBlock Text="DLSS5 + 光线追踪（直连启动）" Foreground="#8b93a3" FontSize="12" Margin="0,10,0,0" TextWrapping="Wrap"/>
           <TextBlock Text="光追：自动开 + 4x 帧生成&#x0a;注入：ReShade + GITC（不含 Mod）" Foreground="#5d6675" FontSize="11" Margin="0,14,0,0" LineHeight="18"/>
         </StackPanel>
       </Border>
@@ -99,6 +94,8 @@ $CardClean = $win.FindName('CardClean')
 $BtnManager = $win.FindName('BtnManager')
 $BtnRecords = $win.FindName('BtnRecords')
 
+. (Join-Path $PSScriptRoot '反虚化状态.ps1')
+
 function Get-LingeringGame {
     @(Get-Process -Name 'Client-Win64-Shipping', 'Wuthering Waves', 'launcher' -ErrorAction SilentlyContinue)
 }
@@ -106,12 +103,14 @@ function Get-LingeringGame {
 function Stop-LingeringGame {
     $p = Get-LingeringGame
     if ($p.Count -eq 0) { return $true }
-    # 先自动等它自己退干净（最多 90 秒）：点 X 后进程往往还要几十秒才真正退出
+
+    # 先自动等它自己退干净（最多 90 秒），避免强杀导致设置没保存
     $Status.Text = "检测到游戏仍在退出中，等待其完全关闭…"
     try { $Status.Dispatcher.Invoke([Action] { }, 'Background') } catch { }
     for ($i = 1; $i -le 45; $i++) {
         Start-Sleep -Seconds 2
-        if ((Get-LingeringGame).Count -eq 0) {
+        $p = Get-LingeringGame
+        if ($p.Count -eq 0) {
             $Status.Text = "游戏已完全退出，继续启动…"
             try { $Status.Dispatcher.Invoke([Action] { }, 'Background') } catch { }
             return $true
@@ -119,34 +118,43 @@ function Stop-LingeringGame {
         $Status.Text = ("等待游戏退出… {0} 秒" -f ($i * 2))
         try { $Status.Dispatcher.Invoke([Action] { }, 'Background') } catch { }
     }
+    # 90 秒还没退，才询问是否强杀
     $p = Get-LingeringGame
     $names = ($p | ForEach-Object { "$($_.ProcessName)($($_.Id))" }) -join '、'
     $ans = [System.Windows.MessageBox]::Show(
-        "检测到游戏进程仍在后台运行：`n`n$names`n`n是否结束它们后再启动？",
+        "检测到游戏进程仍在后台运行：`n`n$names`n`n按 X 关闭游戏后，进程可能还要几十秒才真正退出。`n是否结束它们后再启动？",
         "鸣潮启动器", 'YesNo', 'Question')
-    if ($ans -ne 'Yes') { $Status.Text = "已取消。请等待游戏完全退出再试。"; return $false }
-    foreach ($x in $p) { try { Stop-Process -Id $x.Id -Force -ErrorAction Stop } catch { } }
+    if ($ans -ne 'Yes') {
+        $Status.Text = "已取消。请等待游戏完全退出（启动器关闭后）再试。"
+        return $false
+    }
+    foreach ($x in $p) {
+        try { Stop-Process -Id $x.Id -Force -ErrorAction Stop } catch { }
+    }
     Start-Sleep -Seconds 2
-    if ((Get-LingeringGame).Count -gt 0) { $Status.Text = "⚠ 仍有进程未结束，请用任务管理器手动关闭"; return $false }
+    $left = Get-LingeringGame
+    if ($left.Count -gt 0) {
+        $Status.Text = "⚠ 仍有进程未结束，请用任务管理器手动关闭"
+        return $false
+    }
     return $true
 }
 
 function Start-Mode([string]$mode, [string]$label) {
     if (-not (Test-Path -LiteralPath $Switch)) { $Status.Text = "❌ 找不到模式切换脚本：$Switch"; return }
     if (-not (Stop-LingeringGame)) { return }
-    # 启动前把「反虚化」状态同步进 WuwaTFR.ini，保证这次进游戏就是想要的状态
-    if ($TfrIni) {
-        $sync = Sync-TfrIni $StateFile $TfrIni
-        if ($sync.ok) { Write-Host "[启动器] $($sync.msg)" }
-    }
+    # 启动前把「反虚化」状态同步进 WuwaTFR.ini（保证每次进游戏都是你想要的状态）
+    $sync = Sync-TfrIni
+    $tfrWord = if (Get-TfrEnabled) { '开' } else { '关' }
+    Write-Host "[启动器] 反虚化=$tfrWord　$($sync.msg)"
     $Status.Text = "正在启动 [$label] …（会先写画质预设，再启动游戏）"
     Start-Process -FilePath $PS -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$Switch`"", '-Mode', $mode -WorkingDirectory (Split-Path $Switch -Parent)
     $win.Close()
 }
 
-# WPF 的 ClickCount 只在 MouseDown 系列事件里可靠（Up 事件恒为 1）；
-# 事件脚本块要用 GetNewClosure 绑定变量，否则触发时已出作用域。
 function Invoke-OnDoubleClick([object]$card, [scriptblock]$action, [string]$label) {
+    # WPF 的 ClickCount 只在 MouseDown 系列的 e 里有可靠值，Up 事件恒为 1
+    # GetNewClosure 让脚本块捕获 $label / $action（否则事件触发时变量已出作用域）
     $handler = {
         param($s, $e)
         if ($e.ClickCount -ge 2) {
