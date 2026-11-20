@@ -23,7 +23,8 @@ $ErrorActionPreference = 'Stop'
 $SkinsRoot = 'E:\GameMods\WWMI-Mods\Skins'
 # 单键池：只要非字母（字母做单键容易和游戏快捷键打架）
 $Pool = @('VK_UP', 'VK_DOWN', 'VK_LEFT', 'VK_RIGHT',
-          'VK_OEM_COMMA', 'VK_OEM_2', '0', '9', '8', '7', '6')
+          'VK_OEM_2', 'VK_OEM_PERIOD', 'VK_OEM_COMMA',
+          '0', '9', '8', '7', '6')
 # 字母救急池：仅在单键池用完时才用，且一律配 ctrl 前缀（组合键）
 $LetterPool = @('m', 'n', 'k', 'j', 'u', 'i', 'o', 'l', 'p', 'b', 'v', 'g', 'h', 'y')
 $BadExact = @('VK_INSERT', 'VK_DELETE', 'VK_PRIOR', 'VK_NEXT', 'VK_HOME', 'VK_END',

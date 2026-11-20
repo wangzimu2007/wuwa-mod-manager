@@ -5,7 +5,8 @@ $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 
 $Pool = @('VK_UP', 'VK_DOWN', 'VK_LEFT', 'VK_RIGHT',
-          'VK_OEM_COMMA', 'VK_OEM_2', '0', '9', '8', '7', '6',
+          'VK_OEM_2', 'VK_OEM_PERIOD', 'VK_OEM_COMMA',
+          '0', '9', '8', '7', '6',
           'm', 'n', 'k', 'j', 'u', 'i', 'o', 'l', 'p', 'b', 'v', 'g', 'h', 'y')
 
 function Split-KeyLine([string]$raw) {

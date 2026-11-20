@@ -91,15 +91,17 @@ function Get-NormKey([string]$s) {
 }
 
 function Get-FreeKey($used, $index) {
-    $pool = @('0','1','2','3','4','5','6','7','8','9',
-              'F1','F2','F3','F4','F5','F6','F7','F8','F9','F10','F11','F12',
-              'Up','Down','Left','Right','Insert','Delete','Home','End','PageUp','PageDown',
-              'Alt + 0','Alt + 1','Alt + 2','Alt + 3','Alt + 4','Alt + 5','Alt + 6','Alt + 7','Alt + 8','Alt + 9',
-              'Ctrl + 0','Ctrl + 1','Ctrl + 2','Ctrl + 3','Ctrl + 4','Ctrl + 5')
+    # 与「优化按键.ps1」同一套规则：方向键 → , / → 6~0 → Ctrl+字母
+    $pool = @('VK_UP','VK_DOWN','VK_LEFT','VK_RIGHT',
+              'VK_OEM_2','VK_OEM_PERIOD','VK_OEM_COMMA',
+              '0','9','8','7','6')
+    foreach ($ch in @('m','n','k','j','u','i','o','l','p','b','v','g','h','y')) {
+        $pool += "ctrl $ch"
+    }
     $normUsed = @{}
     foreach ($u in $used) { $normUsed[(Get-NormKey $u)] = $true }
     foreach ($c in $pool) { if (-not $normUsed.ContainsKey((Get-NormKey $c))) { return $c } }
-    return "F$(([int]$index % 12) + 1)"
+    return "ctrl $([char](97 + ([int]$index % 20)))"
 }
 
 function Get-KeyEntries([string]$dir) {
@@ -948,6 +950,11 @@ function Show-Detail($skin) {
 }
 
 function Update-KeyConflicts {
+    # 鼠标键（UI 拖动/点击）与总开关不参与冲突修复
+    $isProtected = {
+        param($row)
+        ($row.entry.spec -match '(?i)VK_(L|R|M)BUTTON') -or ($row.entry.section -match '(?i)enable_mods')
+    }
     if (-not $script:KeyRows -or $script:KeyRows.Count -eq 0) { return }
     $seen = @{}
     foreach ($r in $script:KeyRows) {
@@ -955,6 +962,7 @@ function Update-KeyConflicts {
         $r.conflict = $false
         $r.suggest = ''
         if (-not $n) { continue }
+        if (& $isProtected $r) { continue }
         if ($seen.ContainsKey($n)) { $r.conflict = $true }
         else { $seen[$n] = $true }
     }
@@ -963,6 +971,7 @@ function Update-KeyConflicts {
     foreach ($r in $script:KeyRows) {
         $n = Get-NormKey $r.box.Text
         if (-not $n) { continue }
+        if (& $isProtected $r) { continue }
         $k = $r.entry.path + '|' + $n
         if (-not $dups.ContainsKey($k)) { $dups[$k] = 0 }
         $dups[$k]++
@@ -971,6 +980,7 @@ function Update-KeyConflicts {
         $n = Get-NormKey $r.box.Text
         if (-not $n) { continue }
         $k = $r.entry.path + '|' + $n
+        if (& $isProtected $r) { continue }
         if ($dups[$k] -gt 1) { $r.conflict = $true }
     }
     $i = 0
