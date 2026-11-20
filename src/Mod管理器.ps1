@@ -328,82 +328,108 @@ function Install-Skin($skin, [string]$targetGuid) {
         $done += $folder
     }
     return ("✅ 已装：" + ($done -join ' / ') + "　回游戏按 F10")
+}
 function Start-Install($skin, [string]$targetGuid) {
     if ($script:InstallJob) { return "⚠ 上一次安装还没完成" }
     $map = Get-InstalledMap
+    $logPath = 'E:\GameMods\WWMI-Mods\.state\install.log'
+
+    # 1) 主线程：找源目录（按 guid 分组）
+    $sources = @{}
+    Get-ChildItem -LiteralPath $skin.dir -Recurse -File -Filter *.ini -ErrorAction SilentlyContinue | ForEach-Object {
+        $txt = [IO.File]::ReadAllText($_.FullName, [Text.Encoding]::UTF8)
+        $m = [regex]::Match($txt, 'object_guid\s*=\s*(\d+)')
+        if (-not $m.Success) { return }
+        $g = $m.Groups[1].Value
+        if ($targetGuid -ne 'all' -and $g -ne $targetGuid) { return }
+        if (-not $sources.ContainsKey($g)) { $sources[$g] = New-Object System.Collections.Generic.List[string] }
+        if (-not $sources[$g].Contains($_.DirectoryName)) { $sources[$g].Add($_.DirectoryName) }
+    }
+    if ($sources.Count -eq 0) { return "❌ 这套没有覆盖目标形态" }
+
+    # 2) 同角色其它形态名（主线程算）
+    $targetNames = @()
+    foreach ($g in $sources.Keys) { if ($GuidMap.ContainsKey($g)) { $targetNames += $GuidMap[$g] } }
+    $targetNames = @($targetNames | Sort-Object -Unique)
+
+    # 3) 需要停用的旧 Mod 目录
+    $toDisable = @()
+    if ($targetNames.Count -gt 0) {
+        Get-ChildItem -LiteralPath $ModsRoot -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -notlike 'DISABLED*' } | ForEach-Object {
+            $iniF = Join-Path $_.FullName 'mod.ini'
+            if (-not (Test-Path -LiteralPath $iniF)) { return }
+            $h = Select-String -LiteralPath $iniF -Pattern 'object_guid\s*=\s*(\d+)' | Select-Object -First 1
+            if (-not $h) { return }
+            $og = $h.Matches[0].Groups[1].Value
+            if ($sources.ContainsKey($og)) { return }
+            $on = if ($GuidMap.ContainsKey($og)) { $GuidMap[$og] } else { $null }
+            if ($on -and ($targetNames -contains $on)) { $toDisable += $_.FullName }
+        }
+    }
+
+    # 4) 复制计划
+    $plan = @()
+    foreach ($g in $sources.Keys) {
+        $folder = if ($map.ContainsKey($g)) { $map[$g] } else { "Skin_" + $g }
+        $cur = Join-Path $ModsRoot $folder
+        $dirs = @($sources[$g])
+        foreach ($d in $dirs) {
+            if ($dirs.Count -eq 1) { $plan += [pscustomobject]@{ src = $d; dst = $cur; root = $cur } }
+            else { $plan += [pscustomobject]@{ src = $d; dst = (Join-Path $cur (Split-Path $d -Leaf)); root = $cur } }
+        }
+    }
+
+    # 5) 后台只做字符串复制
     $job = Start-Job -ScriptBlock {
-        param($skinDir, $targetGuid, $modsRoot, $backupRoot, $map, $guidMap)
-        $log = New-Object System.Collections.ArrayList
-        $sources = @{}
-        Get-ChildItem -LiteralPath $skinDir -Recurse -File -Filter *.ini -ErrorAction SilentlyContinue | ForEach-Object {
-            $txt = [IO.File]::ReadAllText($_.FullName, [Text.Encoding]::UTF8)
-            $m = [regex]::Match($txt, 'object_guid\s*=\s*(\d+)')
-            if (-not $m.Success) { return }
-            $g = $m.Groups[1].Value
-            if ($targetGuid -ne 'all' -and $g -ne $targetGuid) { return }
-            if (-not $sources.ContainsKey($g)) { $sources[$g] = New-Object System.Collections.Generic.List[string] }
-            if (-not $sources[$g].Contains($_.DirectoryName)) { $sources[$g].Add($_.DirectoryName) }
+        param($plan, $disable, $logPath)
+        $notes = @()
+        try {
+            foreach ($d in $disable) {
+                try {
+                    Rename-Item -LiteralPath $d -NewName ('DISABLED ' + (Split-Path $d -Leaf)) -ErrorAction Stop
+                    $notes += "停用 $(Split-Path $d -Leaf)"
+                } catch { $notes += "停用失败：$($_.Exception.Message)" }
+            }
+            $roots = @($plan | ForEach-Object { $_.root } | Select-Object -Unique)
+            foreach ($r in $roots) { if (Test-Path -LiteralPath $r) { Remove-Item -LiteralPath $r -Recurse -Force -ErrorAction SilentlyContinue } }
+            foreach ($p in $plan) {
+                if (-not (Test-Path -LiteralPath $p.dst)) { New-Item -ItemType Directory -Path $p.dst -Force | Out-Null }
+                $null = & robocopy $p.src $p.dst /E /NFL /NDL /NJH /NJS /NC /NS /R:1 /W:1
+                if ($LASTEXITCODE -ge 8) { $notes += "复制失败($LASTEXITCODE)：$(Split-Path $p.src -Leaf)" }
+            }
+            $folders = @($plan | ForEach-Object { Split-Path $_.root -Leaf } | Select-Object -Unique)
+            "OK`t已装：" + ($folders -join ' / ') + "　回游戏按 F10`t" + ($notes -join ' | ')
+        } catch {
+            "ERR`t安装失败：" + $_.Exception.Message + "`t" + ($notes -join ' | ')
         }
-        if ($sources.Count -eq 0) { return "❌ 这套没有覆盖目标形态" }
+    } -ArgumentList $plan, $toDisable, $logPath
 
-        # 同角色其它形态 → 停用
-        $targetNames = @()
-        foreach ($g in $sources.Keys) { if ($guidMap.ContainsKey($g)) { $targetNames += $guidMap[$g] } }
-        if ($targetNames.Count -gt 0) {
-            Get-ChildItem -LiteralPath $modsRoot -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -notlike 'DISABLED*' } | ForEach-Object {
-                $iniF = Join-Path $_.FullName 'mod.ini'
-                if (-not (Test-Path -LiteralPath $iniF)) { return }
-                $h = Select-String -LiteralPath $iniF -Pattern 'object_guid\s*=\s*(\d+)' | Select-Object -First 1
-                if (-not $h) { return }
-                $og = $h.Matches[0].Groups[1].Value
-                if ($sources.ContainsKey($og)) { return }
-                if ($guidMap.ContainsKey($og) -and ($targetNames -contains $guidMap[$og])) {
-                    Rename-Item -LiteralPath $_.FullName -NewName ('DISABLED ' + $_.Name) -ErrorAction SilentlyContinue
-                }
-            }
-        }
-
-        if (-not (Test-Path -LiteralPath $backupRoot)) { New-Item -ItemType Directory -Path $backupRoot -Force | Out-Null }
-        $done = @()
-        foreach ($g in $sources.Keys) {
-            $folder = if ($map.ContainsKey($g)) { $map[$g] } else { "Skin_" + $g }
-            $cur = Join-Path $modsRoot $folder
-            $bak = Join-Path $backupRoot $folder
-            if ((Test-Path -LiteralPath $cur) -and -not (Test-Path -LiteralPath $bak)) {
-                $null = & robocopy $cur $bak /E /NFL /NDL /NJH /NJS /NC /NS /R:1 /W:1
-            }
-            if (Test-Path -LiteralPath $cur) { Remove-Item -LiteralPath $cur -Recurse -Force }
-            New-Item -ItemType Directory -Path $cur -Force | Out-Null
-            $dirs = $sources[$g]
-            foreach ($d in $dirs) {
-                if ($dirs.Count -eq 1) { $null = & robocopy $d $cur /E /NFL /NDL /NJH /NJS /NC /NS /R:1 /W:1 }
-                else { $null = & robocopy $d (Join-Path $cur (Split-Path $d -Leaf)) /E /NFL /NDL /NJH /NJS /NC /NS /R:1 /W:1 }
-            }
-            $done += $folder
-        }
-        return ("✅ 已装：" + ($done -join ' / ') + "　回游戏按 F10")
-    } -ArgumentList $skin.dir, $targetGuid, $ModsRoot, $BackupRoot, $map, $GuidMap
     $script:InstallJob = $job
     if (-not $script:InstallTimer) {
         $script:InstallTimer = New-Object System.Windows.Threading.DispatcherTimer
         $script:InstallTimer.Interval = [TimeSpan]::FromMilliseconds(600)
         $script:InstallTimer.Add_Tick({
             if (-not $script:InstallJob) { return }
-            if ($script:InstallJob.State -in @('Completed','Failed','Stopped')) {
+            if ($script:InstallJob.State -in @('Completed', 'Failed', 'Stopped')) {
                 $script:InstallTimer.Stop()
-                $msg = ''
-                try { $msg = Receive-Job -Job $script:InstallJob -ErrorAction SilentlyContinue | Select-Object -Last 1 } catch { }
-                if (-not $msg) { $msg = "❌ 安装失败" }
+                $raw = ''
+                try { $raw = (Receive-Job -Job $script:InstallJob -ErrorAction SilentlyContinue | Select-Object -Last 1) } catch { }
                 Remove-Job -Job $script:InstallJob -Force -ErrorAction SilentlyContinue
                 $script:InstallJob = $null
-                $Status.Text = $msg
+                $msg = if (-not $raw) { '❌ 安装任务无输出' } else { ($raw -split "`t")[1] }
+                $detail = if ($raw -and ($raw -split "`t").Count -ge 3) { ($raw -split "`t")[2] } else { '' }
+                $Status.Text = "$msg $detail".Trim()
+                try {
+                    $logDir = 'E:\GameMods\WWMI-Mods\.state'
+                    if (-not (Test-Path -LiteralPath $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
+                    ('{0}`t{1}`t{2}' -f (Get-Date).ToString('yyyy-MM-dd HH:mm:ss'), $msg, $detail) | Add-Content -LiteralPath (Join-Path $logDir 'install.log') -Encoding UTF8
+                } catch { }
                 try { $script:Installed = Get-InstalledMap } catch { }
             }
         })
     }
     $script:InstallTimer.Start()
-    return '⏳ 已在后台安装…（可继续操作，完成后状态栏会提示）'
-}
+    return '⏳ 已在后台安装…（完成后状态栏会显示结果）'
 }
 
 function Restore-Original {
@@ -785,8 +811,24 @@ function Import-Skin([string]$char, [string]$srcPath) {
 </Window>
 '@
 
+
+# 全局异常捕获：任何未处理异常写入日志而不是直接退出
+function Write-ErrLog([string]$msg) {
+    try {
+        $d = 'E:\GameMods\WWMI-Mods\.state'
+        if (-not (Test-Path -LiteralPath $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null }
+        ("{0}`t{1}" -f (Get-Date).ToString('yyyy-MM-dd HH:mm:ss'), $msg) | Add-Content -LiteralPath (Join-Path $d 'manager_error.log') -Encoding UTF8
+    } catch { }
+}
 $reader = New-Object System.Xml.XmlNodeReader $xaml
 $win = [Windows.Markup.XamlReader]::Load($reader)
+
+# 未处理异常：记录并保持运行
+$win.Dispatcher.add_UnhandledException({
+    param($s2, $e2)
+    Write-ErrLog ("未处理异常：" + $e2.Exception.Message + "`n" + $e2.Exception.StackTrace)
+    $e2.Handled = $true
+})
 
 $CharList = $win.FindName('CharList')
 $CharSearch = $win.FindName('CharSearch')
@@ -885,7 +927,7 @@ function Show-Detail($skin) {
         $btn.Content = "装到 $label"
         $btn.Style = $win.Resources['Btn']
         $btn.Tag = @{ g = $(if ($gs.Count -gt 1) { 'all' } else { $gs[0] }); s = $skin }
-        $btn.Add_Click({ param($s, $e) $Status.Text = Start-Install $s.Tag.s $s.Tag.g })
+        $btn.Add_Click({ param($s, $e) try { $Status.Text = Start-Install $s.Tag.s $s.Tag.g } catch { $m2 = "❌ 安装异常：" + $_.Exception.Message; $Status.Text = $m2; Write-ErrLog $m2 } })
         [void]$ActionPanel.Children.Add($btn)
     }
     $btnRestore = New-Object System.Windows.Controls.Button
