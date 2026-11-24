@@ -96,8 +96,28 @@ $BtnRecords = $win.FindName('BtnRecords')
 
 . (Join-Path $PSScriptRoot '反虚化状态.ps1')
 
+# 等待但仍刷新界面，避免窗口「未响应」
+function Wait-UI([int]$ms) {
+    $frame = New-Object System.Windows.Threading.DispatcherFrame
+    $timer = New-Object System.Windows.Threading.DispatcherTimer
+    $timer.Interval = [TimeSpan]::FromMilliseconds($ms)
+    $timer.Add_Tick({ $timer.Stop(); $frame.Continue = $false })
+    $timer.Start()
+    [System.Windows.Threading.Dispatcher]::PushFrame($frame)
+}
+
 function Get-LingeringGame {
-    @(Get-Process -Name 'Client-Win64-Shipping', 'Wuthering Waves', 'launcher' -ErrorAction SilentlyContinue)
+    # 只认鸣潮自己的进程；launcher.exe 必须路径在鸣潮目录下（系统里有别的同名 launcher.exe）
+    $hit = @()
+    $hit += @(Get-Process -Name 'Client-Win64-Shipping', 'Wuthering Waves' -ErrorAction SilentlyContinue)
+    foreach ($p in @(Get-Process -Name 'launcher' -ErrorAction SilentlyContinue)) {
+        if (-not $p) { continue }
+        $path = ''
+        try { $path = $p.Path } catch { }
+        if (-not $path) { try { $path = $p.MainModule.FileName } catch { } }
+        if ($path -and $path -match '(?i)Wuthering Waves|鸣潮') { $hit += $p }
+    }
+    return @($hit)
 }
 
 function Stop-LingeringGame {
@@ -108,7 +128,7 @@ function Stop-LingeringGame {
     $Status.Text = "检测到游戏仍在退出中，等待其完全关闭…"
     try { $Status.Dispatcher.Invoke([Action] { }, 'Background') } catch { }
     for ($i = 1; $i -le 45; $i++) {
-        Start-Sleep -Seconds 2
+        Wait-UI 2000
         $p = Get-LingeringGame
         if ($p.Count -eq 0) {
             $Status.Text = "游戏已完全退出，继续启动…"
@@ -131,7 +151,7 @@ function Stop-LingeringGame {
     foreach ($x in $p) {
         try { Stop-Process -Id $x.Id -Force -ErrorAction Stop } catch { }
     }
-    Start-Sleep -Seconds 2
+        Wait-UI 2000
     $left = Get-LingeringGame
     if ($left.Count -gt 0) {
         $Status.Text = "⚠ 仍有进程未结束，请用任务管理器手动关闭"
